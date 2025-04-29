@@ -1,0 +1,73 @@
+# Define the path to the text file containing CIDs
+$textFilePath = "C:\ADM_RDP_SCRIPT\cids.txt"
+# Define the keywords to filter group names
+
+#add the desired keyword below
+$keywords = @("")
+# Define the path to the output CSV file
+$outputCsvPath = "C:\ADM_RDP_SCRIPT\ADM_RDP_USERS_$(Get-Date -Format 'MMddyyyy_HHmm').csv"
+# Define the list of domains to check
+$domains = @("domain.com", "appl.domain.com", "ar.domain.com", "at.domain.com", "au.domain.com", "be.domain.com", "br.domain.com", "ca.domain.com", "ch.domain.com", "cn.domain.com", "corp.domain.com", "de.domain.com", "es.domain.com", "fr.domain.com", "he.domain.com", "it.domain.com", "jm.domain.com", "lt.domain.com", "mx.domain.com", "pe.domain.com", "ru.domain.com", "sx.domain.com", "sap.domain.com", "ua.domain.com", "uk.domain.com", "us.domain.com", "za.domain.com")
+# Read CIDs from the text file
+$cids = Get-Content -Path $textFilePath
+# Initialize an array to store the results
+$results = @()
+# Iterate through each CID and get group membership details
+foreach ($cid in $cids) {
+    # Log the CID being processed
+    Write-Host "Processing CID: $cid"
+    $userFound = $false
+    # Iterate through each domain to find the user
+    foreach ($domain in $domains) {
+        # Attempt to find the user by SamAccountName in the specified domain
+        $user = Get-ADUser -Server $domain -Filter { SamAccountName -eq $cid } -Property MemberOf -ErrorAction SilentlyContinue
+        # If the user is not found, attempt to find by other attributes
+        if (-not $user) {
+            Write-Host "CID $cid not found by SamAccountName in $domain. Trying other methods..."
+            # Attempt to find the user by DistinguishedName
+            $user = Get-ADUser -Server $domain -LDAPFilter "(distinguishedName=$cid)" -Property MemberOf -ErrorAction SilentlyContinue
+            if (-not $user) {
+                Write-Host "CID $cid not found by DistinguishedName in $domain. Trying UserPrincipalName..."
+                # Attempt to find the user by UserPrincipalName
+                $user = Get-ADUser -Server $domain -Filter { UserPrincipalName -eq $cid } -Property MemberOf -ErrorAction SilentlyContinue
+            }
+        }
+        if ($user) {
+            $userFound = $true
+            $groups = $user.MemberOf
+            # Filter groups based on the keywords
+            $filteredGroups = $groups | Where-Object {
+                foreach ($keyword in $keywords) {
+                    if ($_ -match $keyword) { return $true }
+                }
+            }
+            # Add the result to the array
+            $results += [PSCustomObject]@{
+                CID    = $cid
+                Domain = $domain
+                Groups = $filteredGroups -join "; "
+            }
+            break
+        }
+    }
+    if (-not $userFound) {
+        # Add a result indicating the CID was not found in any domain
+        $results += [PSCustomObject]@{
+            CID    = $cid
+            Domain = "Not found in any domain"
+            Groups = "N/A"
+        }
+        # Log a message for troubleshooting
+        Write-Host "CID $cid not found in any domain by any method."
+    }
+}
+# Check if the output CSV file already exists
+if (Test-Path $outputCsvPath) {
+    # If the file exists, append the new results to it
+    $results | Export-Csv -Path $outputCsvPath -NoTypeInformation -Append
+} else {
+    # If the file does not exist, create it and write the results
+    $results | Export-Csv -Path $outputCsvPath -NoTypeInformation
+}
+Write-Host "Output exported to $outputCsvPath"
+
